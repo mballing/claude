@@ -43,10 +43,11 @@ export async function scrapeUrls(urls, options) {
   // or the GLOBAL_AGENT_HTTP_PROXY used by this environment's network sandbox).
   const proxyConfig = resolveProxyConfig();
 
+  // Launch the browser without any proxy — proxy is applied per-context below
+  // so that local/localhost URLs are never routed through the proxy.
   const browser = await chromium.launch({
     headless: true,
     executablePath: executablePath || undefined,
-    proxy: proxyConfig || undefined,
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
   });
 
@@ -84,11 +85,16 @@ export async function scrapeUrls(urls, options) {
 async function scrapeOne(browser, url, outputDir, timeout, verbose, log, debug) {
   log(`\nProcessing: ${url}`);
 
-  const page = await browser.newPage();
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.setExtraHTTPHeaders({
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  // Apply the proxy only for non-local URLs so that localhost test pages are
+  // never routed through the environment proxy.
+  const proxyConfig = resolveProxyConfig();
+  const isLocal = isLocalUrl(url);
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    proxy: (!isLocal && proxyConfig) ? proxyConfig : undefined,
   });
+  const page = await context.newPage();
 
   try {
     // Step 1: Navigate and extract page content
@@ -115,7 +121,7 @@ async function scrapeOne(browser, url, outputDir, timeout, verbose, log, debug) 
     debug(`Downloaded ${cssMap.size} CSS file(s), ${imageMap.size} image(s)`);
 
     // Step 4: Rewrite HTML references to use local paths
-    const rewrittenBody = rewriteHtmlUrls(bodyHtml, cssMap, imageMap);
+    const rewrittenBody = rewriteHtmlUrls(bodyHtml, cssMap, imageMap, url);
 
     // Step 5: Build and save the complete HTML document
     const finalHtml = buildHtmlDocument({
@@ -131,7 +137,7 @@ async function scrapeOne(browser, url, outputDir, timeout, verbose, log, debug) 
 
     return folderPath;
   } finally {
-    await page.close();
+    await context.close();
   }
 }
 
@@ -187,6 +193,24 @@ function escapeAttr(str) {
 }
 
 /**
+ * Returns true if the URL targets a local/loopback address.
+ */
+function isLocalUrl(url) {
+  try {
+    const { hostname } = new URL(url);
+    return (
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname === '::1' ||
+      hostname.endsWith('.local') ||
+      hostname.endsWith('.localhost')
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Read HTTP proxy settings from environment variables and return a Playwright
  * proxy config object, or null if no proxy is configured.
  *
@@ -203,9 +227,15 @@ function resolveProxyConfig() {
 
   if (!raw) return null;
 
+  // Also read any existing NO_PROXY / no_proxy bypass list from the environment
+  const noProxy = process.env.NO_PROXY || process.env.no_proxy || '';
+  const bypass = ['localhost', '127.0.0.1', '::1', ...noProxy.split(',').map(s => s.trim())]
+    .filter(Boolean)
+    .join(',');
+
   try {
     const u = new URL(raw);
-    const config = { server: `${u.protocol}//${u.hostname}:${u.port}` };
+    const config = { server: `${u.protocol}//${u.hostname}:${u.port}`, bypass };
     if (u.username) config.username = decodeURIComponent(u.username);
     if (u.password) config.password = decodeURIComponent(u.password);
     return config;

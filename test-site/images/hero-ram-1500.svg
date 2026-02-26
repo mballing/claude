@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="400">
+  <rect width="800" height="400" fill="#2c3e50"/>
+  <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle"
+    font-family="Arial" font-size="22" fill="#ecf0f1">2020 Ram 1500</text>
+</svg>
