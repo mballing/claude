@@ -39,9 +39,14 @@ export async function scrapeUrls(urls, options) {
   // (restricted networks), fall back to any pre-existing chromium in the cache.
   const executablePath = resolveChromiumPath();
 
+  // Pick up an HTTP proxy from the environment (e.g. HTTPS_PROXY, HTTP_PROXY,
+  // or the GLOBAL_AGENT_HTTP_PROXY used by this environment's network sandbox).
+  const proxyConfig = resolveProxyConfig();
+
   const browser = await chromium.launch({
     headless: true,
     executablePath: executablePath || undefined,
+    proxy: proxyConfig || undefined,
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
   });
 
@@ -179,6 +184,34 @@ function escapeAttr(str) {
   return str
     .replace(/&/g, '&amp;')
     .replace(/"/g, '&quot;');
+}
+
+/**
+ * Read HTTP proxy settings from environment variables and return a Playwright
+ * proxy config object, or null if no proxy is configured.
+ *
+ * Checks (in order): HTTPS_PROXY, HTTP_PROXY, GLOBAL_AGENT_HTTP_PROXY
+ */
+function resolveProxyConfig() {
+  const raw =
+    process.env.HTTPS_PROXY ||
+    process.env.https_proxy ||
+    process.env.HTTP_PROXY ||
+    process.env.http_proxy ||
+    process.env.GLOBAL_AGENT_HTTP_PROXY ||
+    '';
+
+  if (!raw) return null;
+
+  try {
+    const u = new URL(raw);
+    const config = { server: `${u.protocol}//${u.hostname}:${u.port}` };
+    if (u.username) config.username = decodeURIComponent(u.username);
+    if (u.password) config.password = decodeURIComponent(u.password);
+    return config;
+  } catch {
+    return null;
+  }
 }
 
 /**
